@@ -1,49 +1,14 @@
 import Websocket, { Data } from 'ws';
 import { Server, IncomingMessage } from 'http';
-import { v4 as uuidV4 } from 'uuid';
-
-interface Meeting {
-    id: string;
-    hostId: string;
-    hostName: string;
-    meetingUsers: MeetingUser[];
-}
-const meetingMap = new Map<string, Meeting>();
-
-interface MeetingUser {
-    socket: Websocket;
-    userId: string;
-    joined: boolean;
-    name: string;
-}
-
-interface MessagePayload {
-    type:
-        | 'join-meeting'
-        | 'joined-meeting'
-        | 'user-joined'
-        | 'connection-request'
-        | 'incoming-connection-request'
-        | 'offer-sdp'
-        | 'answer-sdp'
-        | 'leave-meeting'
-        | 'end-meeting'
-        | 'user-left'
-        | 'meeting-ended'
-        | 'icecandidate'
-        | 'video-toggle'
-        | 'audio-toggle'
-        | 'message'
-        | 'unknown';
-    data?: any;
-}
+import { MessagePayload, MessagePayloadEnum } from '../types';
+import { isMeetingPresent, deleteMeeting, getAllMeetingUsers, getMeetingUser } from './meeting-cache';
 
 function parseMessage(message: string): MessagePayload {
     try {
         const payload = JSON.parse(message);
         return payload;
     } catch (error) {
-        return { type: 'unknown' };
+        return { type: MessagePayloadEnum.UNKNOWN };
     }
 }
 
@@ -59,21 +24,16 @@ function getMeetingId(request: IncomingMessage) {
     const urlObj = new URL(url, `http://${host}`);
     return urlObj.searchParams.get('id');
 }
-function getMeetingUsers(meetingId: string): MeetingUser[] {
-    return meetingMap.get(meetingId)?.meetingUsers || [];
-}
-function getMeetingUser(meetingId: string, userId: string): MeetingUser | null {
-    const meetingUsers = getMeetingUsers(meetingId);
-    return meetingUsers.find((meetingUser) => meetingUser.userId === userId);
-}
+
 interface AddUserOptions {
     meetingId: string;
     userId: string;
     name: string;
 }
+
 function addUser(socket: Websocket, { meetingId, userId, name }: AddUserOptions): void {
-    if (meetingMap.has(meetingId)) {
-        const meetingUsers = getMeetingUsers(meetingId);
+    if (isMeetingPresent(meetingId)) {
+        const meetingUsers = getAllMeetingUsers(meetingId);
         const meetingUser = getMeetingUser(meetingId, userId);
         if (meetingUser) {
             meetingUser.socket = socket;
@@ -84,7 +44,7 @@ function addUser(socket: Websocket, { meetingId, userId, name }: AddUserOptions)
 }
 
 function broadcastUsers(meetingId: string, socket: Websocket, payload: MessagePayload) {
-    const meetingUsers = getMeetingUsers(meetingId);
+    const meetingUsers = getAllMeetingUsers(meetingId);
     for (let i = 0; i < meetingUsers.length; i++) {
         const meetingUser = meetingUsers[i];
         if (meetingUser.socket !== socket) {
@@ -93,12 +53,12 @@ function broadcastUsers(meetingId: string, socket: Websocket, payload: MessagePa
     }
 }
 function terminateMeeting(meetingId: string) {
-    const meetingUsers = getMeetingUsers(meetingId);
+    const meetingUsers = getAllMeetingUsers(meetingId);
     for (let i = 0; i < meetingUsers.length; i++) {
         const meetingUser = meetingUsers[i];
         meetingUser.socket.terminate();
     }
-    meetingMap.delete(meetingId);
+    deleteMeeting(meetingId);
 }
 
 function joinMeeting(meetingId: string, socket: Websocket, payload: MessagePayload) {
@@ -108,7 +68,7 @@ function joinMeeting(meetingId: string, socket: Websocket, payload: MessagePaylo
     addUser(socket, { meetingId, userId, name });
 
     sendMessage(socket, {
-        type: 'joined-meeting',
+        type: MessagePayloadEnum.JOINED_MEETING,
         data: {
             userId,
         },
@@ -116,7 +76,7 @@ function joinMeeting(meetingId: string, socket: Websocket, payload: MessagePaylo
 
     // notifiy other users
     broadcastUsers(meetingId, socket, {
-        type: 'user-joined',
+        type: MessagePayloadEnum.USER_JOINED,
         data: {
             userId,
             name,
@@ -138,7 +98,7 @@ function forwardConnectionRequest(meetingId: string, socket: Websocket, payload:
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
         sendMessage(otherUser?.socket, {
-            type: 'connection-request',
+            type: MessagePayloadEnum.CONNECTION_REQUEST,
             data: {
                 userId,
                 name,
@@ -159,7 +119,7 @@ function forwardOfferSdp(meetingId: string, socket: Websocket, payload: MessageP
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
         sendMessage(otherUser?.socket, {
-            type: 'offer-sdp',
+            type: MessagePayloadEnum.OFFER_SDP,
             data: {
                 userId,
                 sdp,
@@ -179,7 +139,7 @@ function forwardAnswerSdp(meetingId: string, socket: Websocket, payload: Message
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
         sendMessage(otherUser?.socket, {
-            type: 'answer-sdp',
+            type: MessagePayloadEnum.ANSWER_SDP,
             data: {
                 userId,
                 sdp,
@@ -197,7 +157,7 @@ function forwardIceCandidate(meetingId: string, socket: Websocket, payload: Mess
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
         sendMessage(otherUser?.socket, {
-            type: 'icecandidate',
+            type: MessagePayloadEnum.ICECANDIDATE,
             data: {
                 userId,
                 candidate,
@@ -213,7 +173,7 @@ function userLeft(meetingId: string, socket: Websocket, payload: MessagePayload)
     const { userId } = payload.data as UserLeftPayload;
     // notifiy other users
     broadcastUsers(meetingId, socket, {
-        type: 'user-left',
+        type: MessagePayloadEnum.USER_LEFT,
         data: {
             userId: userId,
         },
@@ -228,7 +188,7 @@ function endMeeting(meetingId: string, socket: Websocket, payload: MessagePayloa
     const { userId } = payload.data as MeetingEndedPayload;
     // notifiy other users
     broadcastUsers(meetingId, socket, {
-        type: 'meeting-ended',
+        type: MessagePayloadEnum.MEETING_ENDED,
         data: {
             userId,
         },
@@ -249,33 +209,33 @@ function handleMessage(meetingId: string, socket: Websocket, message: Data) {
     if (typeof message === 'string') {
         const payload = parseMessage(message);
         switch (payload.type) {
-            case 'join-meeting':
+            case MessagePayloadEnum.JOIN_MEETING:
                 joinMeeting(meetingId, socket, payload);
                 break;
-            case 'connection-request':
+            case MessagePayloadEnum.CONNECTION_REQUEST:
                 forwardConnectionRequest(meetingId, socket, payload);
                 break;
-            case 'offer-sdp':
+            case MessagePayloadEnum.OFFER_SDP:
                 forwardOfferSdp(meetingId, socket, payload);
                 break;
-            case 'answer-sdp':
+            case MessagePayloadEnum.ANSWER_SDP:
                 forwardAnswerSdp(meetingId, socket, payload);
                 break;
-            case 'icecandidate':
+            case MessagePayloadEnum.ICECANDIDATE:
                 forwardIceCandidate(meetingId, socket, payload);
                 break;
-            case 'leave-meeting':
+            case MessagePayloadEnum.LEAVE_MEETING:
                 userLeft(meetingId, socket, payload);
                 break;
-            case 'end-meeting':
+            case MessagePayloadEnum.END_MEETING:
                 endMeeting(meetingId, socket, payload);
                 break;
-            case 'video-toggle':
-            case 'audio-toggle':
-            case 'message':
+            case MessagePayloadEnum.VIDEO_TOGGLE:
+            case MessagePayloadEnum.AUDIO_TOGGLE:
+            case MessagePayloadEnum.MESSAGE:
                 forwardEvent(meetingId, socket, payload);
                 break;
-            case 'unknown':
+            case MessagePayloadEnum.UNKNOWN:
                 break;
             default:
                 break;
@@ -299,22 +259,4 @@ export function initMeetingServer(server: Server): void {
         const meetingId = getMeetingId(request);
         listenMessage(meetingId, socket);
     });
-}
-interface StartMeetingParams {
-    name: string;
-    userId: string;
-}
-export function startMeeting({ name, userId }: StartMeetingParams): string {
-    const meetingId = uuidV4();
-    const meeting: Meeting = { id: meetingId, hostId: userId, hostName: name, meetingUsers: [] };
-    meetingMap.set(meetingId, meeting);
-    console.log(meetingMap);
-    return meetingId;
-}
-
-export function checkMeetingExists(meetingId: string): Omit<Meeting, 'meetingUsers'> {
-    if (!meetingMap.has(meetingId)) {
-        throw new Error('Meeting not found');
-    }
-    return meetingMap.get(meetingId) as Omit<Meeting, 'meetingUsers'>;
 }

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { startMeeting, checkMeetingExists } from '../lib/meeting-server';
+import { startMeeting, checkMeetingExists } from '../lib/meeting-cache';
 
 const router = Router();
 interface StartMeetingRequestBody {
