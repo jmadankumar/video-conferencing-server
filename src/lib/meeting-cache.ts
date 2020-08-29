@@ -27,7 +27,7 @@ interface StartMeetingParams {
 
 export function startMeeting({ name, userId }: StartMeetingParams): string {
     const meetingId = uuidV4();
-    const meeting: Meeting = { id: meetingId, hostId: userId, hostName: name, meetingUsers: [] };
+    const meeting: Meeting = { id: meetingId, hostId: userId, hostName: name, meetingUsers: [], startTime: Date.now() };
     meetingMap.set(meetingId, meeting);
     console.log(meetingMap);
     return meetingId;

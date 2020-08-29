@@ -5,12 +5,14 @@ export interface Meeting {
     hostId: string;
     hostName: string;
     meetingUsers: MeetingUser[];
+    startTime: number;
 }
 export interface MeetingUser {
     socket: Websocket;
     userId: string;
     joined: boolean;
     name: string;
+    isAlive: boolean;
 }
 export enum MessagePayloadEnum {
     JOIN_MEETING = 'join-meeting',
@@ -28,6 +30,8 @@ export enum MessagePayloadEnum {
     VIDEO_TOGGLE = 'video-toggle',
     AUDIO_TOGGLE = 'audio-toggle',
     MESSAGE = 'message',
+    HEART_BEAT = 'heartbeat',
+    NOT_FOUND = 'not-found',
     UNKNOWN = 'unknown',
 }
 export interface MessagePayload {

@@ -1,7 +1,8 @@
 import Websocket, { Data } from 'ws';
-import { Server, IncomingMessage } from 'http';
-import { MessagePayload, MessagePayloadEnum } from '../types';
-import { isMeetingPresent, deleteMeeting, getAllMeetingUsers, getMeetingUser } from './meeting-cache';
+import { Server } from 'http';
+import { MessagePayload, MessagePayloadEnum, Meeting } from '../types';
+import { isMeetingPresent, deleteMeeting, getAllMeetingUsers, getMeetingUser, getMeetingMap } from './meeting-cache';
+import { getMeetingId } from '../util/meeting.util';
 
 function parseMessage(message: string): MessagePayload {
     try {
@@ -13,16 +14,9 @@ function parseMessage(message: string): MessagePayload {
 }
 
 function sendMessage(socket: Websocket, payload: MessagePayload) {
-    socket.send(JSON.stringify(payload));
-}
-
-function getMeetingId(request: IncomingMessage) {
-    const {
-        url,
-        headers: { host },
-    } = request;
-    const urlObj = new URL(url, `http://${host}`);
-    return urlObj.searchParams.get('id');
+    if (socket.readyState === Websocket.OPEN) {
+        socket.send(JSON.stringify(payload));
+    }
 }
 
 interface AddUserOptions {
@@ -32,14 +26,12 @@ interface AddUserOptions {
 }
 
 function addUser(socket: Websocket, { meetingId, userId, name }: AddUserOptions): void {
-    if (isMeetingPresent(meetingId)) {
-        const meetingUsers = getAllMeetingUsers(meetingId);
-        const meetingUser = getMeetingUser(meetingId, userId);
-        if (meetingUser) {
-            meetingUser.socket = socket;
-        } else {
-            meetingUsers.push({ socket, userId, joined: true, name });
-        }
+    const meetingUsers = getAllMeetingUsers(meetingId);
+    const meetingUser = getMeetingUser(meetingId, userId);
+    if (meetingUser) {
+        meetingUser.socket = socket;
+    } else {
+        meetingUsers.push({ socket, userId, joined: true, name, isAlive: true });
     }
 }
 
@@ -64,25 +56,30 @@ function terminateMeeting(meetingId: string) {
 function joinMeeting(meetingId: string, socket: Websocket, payload: MessagePayload) {
     const { userId, name } = payload.data;
     console.log('User joined meeting', userId);
+    if (isMeetingPresent(meetingId)) {
+        addUser(socket, { meetingId, userId, name });
 
-    addUser(socket, { meetingId, userId, name });
+        sendMessage(socket, {
+            type: MessagePayloadEnum.JOINED_MEETING,
+            data: {
+                userId,
+            },
+        });
 
-    sendMessage(socket, {
-        type: MessagePayloadEnum.JOINED_MEETING,
-        data: {
-            userId,
-        },
-    });
-
-    // notifiy other users
-    broadcastUsers(meetingId, socket, {
-        type: MessagePayloadEnum.USER_JOINED,
-        data: {
-            userId,
-            name,
-            ...payload.data,
-        },
-    });
+        // notifiy other users
+        broadcastUsers(meetingId, socket, {
+            type: MessagePayloadEnum.USER_JOINED,
+            data: {
+                userId,
+                name,
+                ...payload.data,
+            },
+        });
+    } else {
+        sendMessage(socket, {
+            type: MessagePayloadEnum.NOT_FOUND,
+        });
+    }
 }
 interface ConnectWithOtherUserPayloadData {
     userId: string;
@@ -93,7 +90,7 @@ interface ConnectWithOtherUserPayloadData {
         audioEnabled: boolean;
     };
 }
-function forwardConnectionRequest(meetingId: string, socket: Websocket, payload: MessagePayload) {
+function forwardConnectionRequest(meetingId: string, payload: MessagePayload) {
     const { userId, otherUserId, name } = payload.data as ConnectWithOtherUserPayloadData;
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
@@ -114,7 +111,7 @@ interface OfferSdpPayload {
     sdp: string;
 }
 
-function forwardOfferSdp(meetingId: string, socket: Websocket, payload: MessagePayload) {
+function forwardOfferSdp(meetingId: string, payload: MessagePayload) {
     const { userId, otherUserId, sdp } = payload.data as OfferSdpPayload;
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
@@ -134,7 +131,7 @@ interface AnswerSdpPayload {
     sdp: string;
 }
 
-function forwardAnswerSdp(meetingId: string, socket: Websocket, payload: MessagePayload) {
+function forwardAnswerSdp(meetingId: string, payload: MessagePayload) {
     const { userId, otherUserId, sdp } = payload.data as AnswerSdpPayload;
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
@@ -152,7 +149,7 @@ interface IceCandidatePayload {
     otherUserId: string;
     candidate: any;
 }
-function forwardIceCandidate(meetingId: string, socket: Websocket, payload: MessagePayload) {
+function forwardIceCandidate(meetingId: string, payload: MessagePayload) {
     const { userId, otherUserId, candidate } = payload.data as IceCandidatePayload;
     const otherUser = getMeetingUser(meetingId, otherUserId);
     if (otherUser?.socket) {
@@ -205,6 +202,15 @@ function forwardEvent(meetingId: string, socket: Websocket, payload: MessagePayl
         },
     });
 }
+
+function handleHeartbeat(meetingId: string, socket: Websocket) {
+    const meetingUsers = getAllMeetingUsers(meetingId);
+    const meetingUser = meetingUsers.find((meetingUser) => meetingUser.socket === socket);
+    if (meetingUser) {
+        meetingUser.isAlive = true;
+    }
+}
+
 function handleMessage(meetingId: string, socket: Websocket, message: Data) {
     if (typeof message === 'string') {
         const payload = parseMessage(message);
@@ -213,16 +219,16 @@ function handleMessage(meetingId: string, socket: Websocket, message: Data) {
                 joinMeeting(meetingId, socket, payload);
                 break;
             case MessagePayloadEnum.CONNECTION_REQUEST:
-                forwardConnectionRequest(meetingId, socket, payload);
+                forwardConnectionRequest(meetingId, payload);
                 break;
             case MessagePayloadEnum.OFFER_SDP:
-                forwardOfferSdp(meetingId, socket, payload);
+                forwardOfferSdp(meetingId, payload);
                 break;
             case MessagePayloadEnum.ANSWER_SDP:
-                forwardAnswerSdp(meetingId, socket, payload);
+                forwardAnswerSdp(meetingId, payload);
                 break;
             case MessagePayloadEnum.ICECANDIDATE:
-                forwardIceCandidate(meetingId, socket, payload);
+                forwardIceCandidate(meetingId, payload);
                 break;
             case MessagePayloadEnum.LEAVE_MEETING:
                 userLeft(meetingId, socket, payload);
@@ -234,6 +240,9 @@ function handleMessage(meetingId: string, socket: Websocket, message: Data) {
             case MessagePayloadEnum.AUDIO_TOGGLE:
             case MessagePayloadEnum.MESSAGE:
                 forwardEvent(meetingId, socket, payload);
+                break;
+            case MessagePayloadEnum.HEART_BEAT:
+                handleHeartbeat(meetingId, socket);
                 break;
             case MessagePayloadEnum.UNKNOWN:
                 break;
@@ -249,6 +258,47 @@ function listenMessage(meetingId: string, socket: Websocket): void {
     }
 }
 
+function endMeetingBySystem(meeting: Meeting) {
+    const meetingUsers = meeting.meetingUsers;
+    meetingUsers.forEach((meetingUser) => {
+        sendMessage(meetingUser.socket, {
+            type: MessagePayloadEnum.END_MEETING,
+        });
+        meetingUser.socket?.terminate();
+    });
+    meeting.meetingUsers = [];
+    deleteMeeting(meeting.id);
+}
+
+function checkConnectionIsValid(meeting: Meeting) {
+    const meetingUsers = meeting.meetingUsers;
+    meetingUsers.forEach((meetingUser, index) => {
+        if (meetingUser.socket.readyState === Websocket.CLOSED || !meetingUser.isAlive) {
+            userLeft(meeting.id, meetingUser.socket, {
+                type: MessagePayloadEnum.USER_LEFT,
+                data: {
+                    userId: meetingUser.userId,
+                },
+            });
+            meetingUsers.splice(index, 1);
+            meetingUser.socket?.terminate();
+        } else {
+            meetingUser.isAlive = false;
+        }
+    });
+}
+
+function watchConnections() {
+    const meetingMap = getMeetingMap();
+    meetingMap.forEach((meeting) => {
+        if (meeting.startTime + 30 * 60 * 1000 <= Date.now()) {
+            endMeetingBySystem(meeting);
+        } else {
+            checkConnectionIsValid(meeting);
+        }
+    });
+}
+
 export function initMeetingServer(server: Server): void {
     const meetingServer = new Websocket.Server({
         server,
@@ -259,4 +309,7 @@ export function initMeetingServer(server: Server): void {
         const meetingId = getMeetingId(request);
         listenMessage(meetingId, socket);
     });
+    setInterval(() => {
+        watchConnections();
+    }, 20 * 1000);
 }
