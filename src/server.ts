@@ -16,11 +16,11 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(cors());
 
 app.get('/echo', (req, res) => {
-    res.send('Echo From server');
+  res.send('Echo From server');
 });
 
 app.use(router);
 
 server.listen(PORT, () => {
-    console.log(`Server started at port : ${PORT}`);
+  console.log(`Server started at port : ${PORT}`);
 });

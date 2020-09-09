@@ -1,6 +1,6 @@
 {
-    "ignore": ["node_modules", ".git"],
-    "watch": ["src"],
-    "exec": "npm run start:ts-node",
-    "ext": "ts,js"
+  "ignore": ["node_modules", ".git"],
+  "watch": ["src"],
+  "exec": "npm run start:ts-node",
+  "ext": "ts,js"
 }

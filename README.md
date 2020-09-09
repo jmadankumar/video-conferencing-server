@@ -4,14 +4,14 @@
 
 ### Prerequisite
 
--   NodeJS (>=12+)
--   Yarn (>=1.19+)
+- NodeJS (>=12+)
+- Yarn (>=1.19+)
 
 ### Technologies used
 
--   NodeJS
--   Typescript
--   Websocket
+- NodeJS
+- Typescript
+- Websocket
 
 ### Run server
 

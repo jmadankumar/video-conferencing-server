@@ -1,14 +1,14 @@
 {
-    "compilerOptions": {
-        "allowJs": true,
-        "target": "ES6",
-        "module": "CommonJS",
-        "esModuleInterop": true,
-        "removeComments": true,
-        "outDir": "build",
-        "rootDir": "src",
-        "resolveJsonModule": true,
-        "noImplicitAny": true
-    },
-    "include": ["src"]
+  "compilerOptions": {
+    "allowJs": true,
+    "target": "ES6",
+    "module": "CommonJS",
+    "esModuleInterop": true,
+    "removeComments": true,
+    "outDir": "build",
+    "rootDir": "src",
+    "resolveJsonModule": true,
+    "noImplicitAny": true
+  },
+  "include": ["src"]
 }
